@@ -83,8 +83,8 @@ do_install() {
 
 	# Install example binaries
 	install -d ${D}${bindir}
-	install -m 0755 ${S}/examples/example_c ${D}${bindir}/
-	install -m 0755 ${S}/examples/example_cpp ${D}${bindir}/
+	install -m 0755 ${S}/examples/wakeword_example_c ${D}${bindir}/
+	install -m 0755 ${S}/examples/wakeword_example_cpp ${D}${bindir}/
 
 	# Install test binary (optional, can be removed if not needed)
 	install -m 0755 ${S}/tests/test_micro_wakeword ${D}${bindir}/
@@ -120,7 +120,7 @@ PACKAGES = "${PN} ${PN}-dev ${PN}-staticdev ${PN}-examples ${PN}-tests ${PN}-mod
 FILES:${PN} = "${libdir}/libtensorflowlite_c.so"
 FILES:${PN}-dev = "${includedir}/micro_wakeword.h"
 FILES:${PN}-staticdev = "${libdir}/libmicro_wakeword.a"
-FILES:${PN}-examples = "${bindir}/example_c ${bindir}/example_cpp"
+FILES:${PN}-examples = "${bindir}/wakeword_example_c ${bindir}/wakeword_example_cpp"
 FILES:${PN}-tests = "${bindir}/test_micro_wakeword ${bindir}/tests ${bindir}/models"
 FILES:${PN}-models = "${bindir}/models"
 FILES:${PN}-dbg = "${bindir}/.debug"
