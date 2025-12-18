@@ -1,0 +1,70 @@
+# Makefile for building the micro_wakeword C library
+
+CC ?= gcc
+CXX ?= g++
+CFLAGS ?= -Wall -Wextra -O2 -fPIC
+CXXFLAGS ?= -Wall -Wextra -O2 -fPIC
+LDFLAGS ?=
+INCLUDES = -I. -Iinclude
+
+# Path to micro_features library (from pymicro-features)
+# Can be overridden for bitbake builds using installed paths
+MICRO_FEATURES_DIR ?= ../pymicro-features
+MICRO_FEATURES_INCLUDE ?= $(MICRO_FEATURES_DIR)/include
+MICRO_FEATURES_LIB ?= $(MICRO_FEATURES_DIR)/libmicro_features.a
+
+# Source files for the library
+LIB_SOURCES = \
+	src/micro_wakeword_lib.c
+
+# Convert source paths to object paths in build directory
+BUILD_DIR = build
+LIB_OBJECTS = $(patsubst %.c,$(BUILD_DIR)/%.o,$(LIB_SOURCES))
+
+# Library name
+LIBRARY = libmicro_wakeword.a
+
+# Example executables
+EXAMPLE_C = examples/example_c
+EXAMPLE_CPP = examples/example_cpp
+
+# Test executable
+TEST = tests/test_micro_wakeword
+
+.PHONY: all clean library examples test
+
+all: library examples
+
+library: $(LIBRARY)
+
+$(LIBRARY): $(LIB_OBJECTS) | $(BUILD_DIR)
+	ar rcs $@ $^
+
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)/src $(BUILD_DIR)/examples $(BUILD_DIR)/tests
+
+# Compile C files
+$(BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCLUDES) -I$(MICRO_FEATURES_INCLUDE) -c $< -o $@
+
+examples: $(EXAMPLE_C) $(EXAMPLE_CPP)
+
+$(EXAMPLE_C): examples/example.c $(LIBRARY) $(MICRO_FEATURES_LIB)
+	$(CC) $(CFLAGS) $(LDFLAGS) $(INCLUDES) -I$(MICRO_FEATURES_INCLUDE) -o $@ $< -L. -L$(MICRO_FEATURES_DIR) -lmicro_wakeword -lmicro_features -ldl -lm
+
+$(EXAMPLE_CPP): examples/example.cpp $(LIBRARY) $(MICRO_FEATURES_LIB)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(INCLUDES) -I$(MICRO_FEATURES_INCLUDE) -o $@ $< -L. -L$(MICRO_FEATURES_DIR) -lmicro_wakeword -lmicro_features -ldl -lm
+
+test: $(TEST)
+
+$(TEST): tests/test_micro_wakeword.c tests/wav_reader.c $(LIBRARY) $(MICRO_FEATURES_LIB)
+	$(CC) $(CFLAGS) $(LDFLAGS) $(INCLUDES) -I$(MICRO_FEATURES_INCLUDE) -o $@ tests/test_micro_wakeword.c tests/wav_reader.c -L. -L$(MICRO_FEATURES_DIR) -lmicro_wakeword -lmicro_features -ldl -lm
+
+debug_c: tests/debug_c
+
+tests/debug_c: tests/debug_c.c tests/wav_reader.c $(LIBRARY) $(MICRO_FEATURES_LIB)
+	$(CC) $(CFLAGS) $(LDFLAGS) $(INCLUDES) -I$(MICRO_FEATURES_INCLUDE) -o $@ tests/debug_c.c tests/wav_reader.c -L. -L$(MICRO_FEATURES_DIR) -lmicro_wakeword -lmicro_features -ldl -lm
+
+clean:
+	rm -rf $(BUILD_DIR) $(LIBRARY) $(EXAMPLE_C) $(EXAMPLE_CPP) $(TEST) tests/debug_c
