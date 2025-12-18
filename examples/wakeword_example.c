@@ -1,4 +1,4 @@
-// examples/example.c
+// examples/wakeword_example.c
 // Example usage of the micro_wakeword library
 
 #include <stdio.h>

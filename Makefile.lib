@@ -25,8 +25,8 @@ LIB_OBJECTS = $(patsubst %.c,$(BUILD_DIR)/%.o,$(LIB_SOURCES))
 LIBRARY = libmicro_wakeword.a
 
 # Example executables
-EXAMPLE_C = examples/example_c
-EXAMPLE_CPP = examples/example_cpp
+EXAMPLE_C = examples/wakeword_example_c
+EXAMPLE_CPP = examples/wakeword_example_cpp
 
 # Test executable
 TEST = tests/test_micro_wakeword
@@ -50,10 +50,10 @@ $(BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
 
 examples: $(EXAMPLE_C) $(EXAMPLE_CPP)
 
-$(EXAMPLE_C): examples/example.c $(LIBRARY) $(MICRO_FEATURES_LIB)
+$(EXAMPLE_C): examples/wakeword_example.c $(LIBRARY) $(MICRO_FEATURES_LIB)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(INCLUDES) -I$(MICRO_FEATURES_INCLUDE) -o $@ $< -L. -L$(MICRO_FEATURES_DIR) -lmicro_wakeword -lmicro_features -ldl -lm
 
-$(EXAMPLE_CPP): examples/example.cpp $(LIBRARY) $(MICRO_FEATURES_LIB)
+$(EXAMPLE_CPP): examples/wakeword_example.cpp $(LIBRARY) $(MICRO_FEATURES_LIB)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(INCLUDES) -I$(MICRO_FEATURES_INCLUDE) -o $@ $< -L. -L$(MICRO_FEATURES_DIR) -lmicro_wakeword -lmicro_features -ldl -lm
 
 test: $(TEST)

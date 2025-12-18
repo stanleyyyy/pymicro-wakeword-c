@@ -1,4 +1,4 @@
-// examples/example.cpp
+// examples/wakeword_example.cpp
 // C++ example usage of the micro_wakeword library
 
 #include <iostream>
