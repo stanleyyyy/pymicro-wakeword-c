@@ -1,6 +1,7 @@
 import ctypes
 import json
 import statistics
+import sys
 from collections import deque
 from collections.abc import Iterable
 from pathlib import Path
@@ -23,7 +24,7 @@ SAMPLES_PER_CHUNK = 160  # 10ms
 BYTES_PER_SAMPLE = 2  # 16-bit
 BYTES_PER_CHUNK = SAMPLES_PER_CHUNK * BYTES_PER_SAMPLE
 SECONDS_PER_CHUNK = SAMPLES_PER_CHUNK / SAMPLES_PER_SECOND
-STRIDE = 3
+DEFAULT_STRIDE = 2  # Fallback if stride detection fails
 
 
 class MicroWakeWord(TfLiteWakeWord):
@@ -74,6 +75,7 @@ class MicroWakeWord(TfLiteWakeWord):
         self.model_path = str(Path(tflite_model).resolve()).encode("utf-8")
         self.model: Optional[ctypes.c_void_p] = None
         self.interpreter: Optional[ctypes.c_void_p] = None
+        self.stride: int = DEFAULT_STRIDE  # Will be detected from model
         self._load_model()
 
         self._features: List[np.ndarray] = []
@@ -99,6 +101,18 @@ class MicroWakeWord(TfLiteWakeWord):
 
         self.input_scale, self.input_zero_point = input_q.scale, input_q.zero_point
         self.output_scale, self.output_zero_point = output_q.scale, output_q.zero_point
+
+        # Detect stride from input tensor shape
+        # Expected shape: [1, stride, 40] where stride is dimension 1
+        num_dims = self.lib.TfLiteTensorNumDims(self.input_tensor)
+        if num_dims >= 3:
+            detected_stride = self.lib.TfLiteTensorDim(self.input_tensor, 1)
+            if detected_stride >= 1:
+                self.stride = detected_stride
+            else:
+                self.stride = DEFAULT_STRIDE
+        else:
+            self.stride = DEFAULT_STRIDE
 
     def close(self) -> None:
         """Release resources."""
@@ -185,7 +199,7 @@ class MicroWakeWord(TfLiteWakeWord):
 
         self._features.append(features)
 
-        if len(self._features) < STRIDE:
+        if len(self._features) < self.stride:
             # Not enough windows
             return False
 

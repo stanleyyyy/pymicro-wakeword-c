@@ -13,7 +13,7 @@
 #include "micro_features.h"
 
 // Constants
-#define STRIDE 3
+#define MAX_STRIDE 4  // Maximum expected stride value
 #define SAMPLES_PER_CHUNK 160  // 10ms @ 16kHz
 #define BYTES_PER_CHUNK (SAMPLES_PER_CHUNK * 2)  // 16-bit samples
 #define BYTES_PER_SAMPLE 2
@@ -37,6 +37,8 @@ typedef TfLiteStatus (*TfLiteInterpreterInvokeFunc)(TfLiteInterpreter);
 typedef TfLiteTensor (*TfLiteInterpreterGetInputTensorFunc)(TfLiteInterpreter, int32_t);
 typedef TfLiteTensor (*TfLiteInterpreterGetOutputTensorFunc)(TfLiteInterpreter, int32_t);
 typedef size_t (*TfLiteTensorByteSizeFunc)(TfLiteTensor);
+typedef int32_t (*TfLiteTensorNumDimsFunc)(TfLiteTensor);
+typedef int32_t (*TfLiteTensorDimFunc)(TfLiteTensor, int32_t);
 typedef TfLiteQuantizationParams (*TfLiteTensorQuantizationParamsFunc)(TfLiteTensor);
 typedef TfLiteStatus (*TfLiteTensorCopyFromBufferFunc)(TfLiteTensor, const void *, size_t);
 typedef TfLiteStatus (*TfLiteTensorCopyToBufferFunc)(TfLiteTensor, void *, size_t);
@@ -71,8 +73,11 @@ struct MicroWakeWord {
 	float output_scale;
 	int32_t output_zero_point;
 
-	// Feature buffer (STRIDE entries)
-	FeatureBufferEntry feature_buffer[STRIDE];
+	// Detected stride from model
+	size_t stride;
+
+	// Feature buffer (dynamic, up to MAX_STRIDE entries)
+	FeatureBufferEntry feature_buffer[MAX_STRIDE];
 	size_t feature_buffer_count;
 
 	// Probability sliding window
@@ -91,6 +96,8 @@ struct MicroWakeWord {
 	TfLiteInterpreterGetInputTensorFunc TfLiteInterpreterGetInputTensor;
 	TfLiteInterpreterGetOutputTensorFunc TfLiteInterpreterGetOutputTensor;
 	TfLiteTensorByteSizeFunc TfLiteTensorByteSize;
+	TfLiteTensorNumDimsFunc TfLiteTensorNumDims;
+	TfLiteTensorDimFunc TfLiteTensorDim;
 	TfLiteTensorQuantizationParamsFunc TfLiteTensorQuantizationParams;
 	TfLiteTensorCopyFromBufferFunc TfLiteTensorCopyFromBuffer;
 	TfLiteTensorCopyToBufferFunc TfLiteTensorCopyToBuffer;
@@ -161,6 +168,10 @@ static int load_tflite_functions(MicroWakeWord *mww, const char *lib_path) {
 		dlsym(mww->tflite_handle, "TfLiteInterpreterGetOutputTensor");
 	mww->TfLiteTensorByteSize = (TfLiteTensorByteSizeFunc)
 		dlsym(mww->tflite_handle, "TfLiteTensorByteSize");
+	mww->TfLiteTensorNumDims = (TfLiteTensorNumDimsFunc)
+		dlsym(mww->tflite_handle, "TfLiteTensorNumDims");
+	mww->TfLiteTensorDim = (TfLiteTensorDimFunc)
+		dlsym(mww->tflite_handle, "TfLiteTensorDim");
 	mww->TfLiteTensorQuantizationParams = (TfLiteTensorQuantizationParamsFunc)
 		dlsym(mww->tflite_handle, "TfLiteTensorQuantizationParams");
 	mww->TfLiteTensorCopyFromBuffer = (TfLiteTensorCopyFromBufferFunc)
@@ -176,7 +187,8 @@ static int load_tflite_functions(MicroWakeWord *mww, const char *lib_path) {
 	if (!mww->TfLiteModelCreateFromFile || !mww->TfLiteInterpreterCreate ||
 	    !mww->TfLiteInterpreterAllocateTensors || !mww->TfLiteInterpreterInvoke ||
 	    !mww->TfLiteInterpreterGetInputTensor || !mww->TfLiteInterpreterGetOutputTensor ||
-	    !mww->TfLiteTensorByteSize || !mww->TfLiteTensorQuantizationParams ||
+	    !mww->TfLiteTensorByteSize || !mww->TfLiteTensorNumDims || !mww->TfLiteTensorDim ||
+	    !mww->TfLiteTensorQuantizationParams ||
 	    !mww->TfLiteTensorCopyFromBuffer || !mww->TfLiteTensorCopyToBuffer ||
 	    !mww->TfLiteInterpreterDelete || !mww->TfLiteModelDelete) {
 		dlclose(mww->tflite_handle);
@@ -262,6 +274,23 @@ static int load_model(MicroWakeWord *mww, const char *model_path) {
 	mww->output_scale = output_q.scale;
 	mww->output_zero_point = output_q.zero_point;
 
+	// Detect stride from input tensor shape
+	// Expected shape: [1, stride, 40] where stride is dimension 1
+	int32_t num_dims = mww->TfLiteTensorNumDims(mww->input_tensor);
+	if (num_dims < 3) {
+		// Invalid shape, use default stride
+		mww->stride = 2;
+	} else {
+		// Get dimension 1 (stride dimension)
+		int32_t detected_stride = mww->TfLiteTensorDim(mww->input_tensor, 1);
+		if (detected_stride < 1 || detected_stride > MAX_STRIDE) {
+			// Invalid stride, use default
+			mww->stride = 2;
+		} else {
+			mww->stride = (size_t)detected_stride;
+		}
+	}
+
 	return 0;
 }
 
@@ -331,14 +360,14 @@ bool micro_wakeword_process_streaming(MicroWakeWord *mww,
 	entry->features_size = features_size;
 	mww->feature_buffer_count++;
 
-	// Check if we have enough features (matching Python: if len(self._features) < STRIDE)
-	if (mww->feature_buffer_count < STRIDE) {
+	// Check if we have enough features (matching Python: if len(self._features) < stride)
+	if (mww->feature_buffer_count < mww->stride) {
 		return false;  // Not enough features yet
 	}
 
 	// Concatenate features (matching Python: np.concatenate(self._features, axis=1))
 	size_t total_features = 0;
-	for (size_t i = 0; i < STRIDE; ++i) {
+	for (size_t i = 0; i < mww->stride; ++i) {
 		total_features += mww->feature_buffer[i].features_size;
 	}
 
@@ -349,7 +378,7 @@ bool micro_wakeword_process_streaming(MicroWakeWord *mww,
 	}
 
 	size_t offset = 0;
-	for (size_t i = 0; i < STRIDE; ++i) {
+	for (size_t i = 0; i < mww->stride; ++i) {
 		memcpy(concatenated + offset, mww->feature_buffer[i].features,
 		       mww->feature_buffer[i].features_size * sizeof(float));
 		offset += mww->feature_buffer[i].features_size;
@@ -417,7 +446,7 @@ bool micro_wakeword_process_streaming(MicroWakeWord *mww,
 
 	// Clear feature buffer (stride instead of rolling)
 	// Note: Python version clears buffer completely, next feature window starts fresh
-	for (size_t i = 0; i < STRIDE; ++i) {
+	for (size_t i = 0; i < mww->stride; ++i) {
 		free(mww->feature_buffer[i].features);
 		mww->feature_buffer[i].features = NULL;
 		mww->feature_buffer[i].features_size = 0;
@@ -443,8 +472,8 @@ void micro_wakeword_reset(MicroWakeWord *mww) {
 		return;
 	}
 
-	// Clear feature buffer
-	for (size_t i = 0; i < STRIDE; ++i) {
+	// Clear feature buffer (use MAX_STRIDE to ensure all entries are cleared)
+	for (size_t i = 0; i < MAX_STRIDE; ++i) {
 		free(mww->feature_buffer[i].features);
 		mww->feature_buffer[i].features = NULL;
 		mww->feature_buffer[i].features_size = 0;
@@ -455,7 +484,7 @@ void micro_wakeword_reset(MicroWakeWord *mww) {
 	mww->prob_window.count = 0;
 	mww->prob_window.head = 0;
 
-	// Reload model to reset internal state
+	// Reload model to reset internal state (this will also re-detect stride)
 	if (mww->interpreter) {
 		mww->TfLiteInterpreterDelete(mww->interpreter);
 		mww->interpreter = NULL;
@@ -525,7 +554,7 @@ void micro_wakeword_destroy(MicroWakeWord *mww) {
 	}
 
 	// Clear feature buffer
-	for (size_t i = 0; i < STRIDE; ++i) {
+	for (size_t i = 0; i < MAX_STRIDE; ++i) {
 		free(mww->feature_buffer[i].features);
 	}
 
